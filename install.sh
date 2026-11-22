@@ -5,7 +5,7 @@
 #   1. glbattlimit  - battery charge limit at 80% (with GUI toggle)
 #   2. Speedify
 #   3. LPM timers   - WiFi sleep, Ethernet sleep and auto-shutdown all 60 s
-#   4. Repeater watchdog - stop repeater after 2 min disconnected
+#   4. Repeater watchdog - stop repeater after 60 min disconnected
 #                          (so auto-shutdown can happen)
 #   5. Reboot
 #
