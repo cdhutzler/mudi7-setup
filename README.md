@@ -16,7 +16,7 @@ One-command restore of my custom software and settings on a GL.iNet Mudi 7 (GL-E
 SSH into the Mudi 7 as root, then:
 
 ```sh
-wget -O /tmp/install.sh https://raw.githubusercontent.com/YOUR_GITHUB_USER/mudi7-setup/main/install.sh && sh /tmp/install.sh
+wget -O /tmp/install.sh https://raw.githubusercontent.com/cdhutzler/mudi7-setup/main/install.sh && sh /tmp/install.sh
 ```
 
 The router needs internet access (for glbattlimit and Speedify downloads).
