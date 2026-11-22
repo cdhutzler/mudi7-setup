@@ -4,9 +4,11 @@
 # Restores:
 #   1. glbattlimit  - battery charge limit at 80% (with GUI toggle)
 #   2. LPM timers   - WiFi sleep, Ethernet sleep and auto-shutdown all 60 s
-#   3. Repeater watchdog - stop repeater after 60 min disconnected
-#                          (so auto-shutdown can happen)
-#   4. Speedify     - last, because its installer reboots the router
+#   3. mudi-sms     - send SMS directly through the modem AT port
+#                     (the GL web UI outbox stalls)
+#   4. Repeater watchdog - stop repeater after 60 min disconnected
+#                          (so auto-shutdown can happen) and text a warning
+#   5. Speedify     - last, because its installer reboots the router
 #
 # Usage on the Mudi 7 (as root, via SSH):
 #   wget -O /tmp/install.sh https://raw.githubusercontent.com/cdhutzler/mudi7-setup/main/install.sh && sh /tmp/install.sh
@@ -14,11 +16,14 @@
 # Options (environment variables):
 #   BATT_LIMIT=80      charge limit percentage
 #   LPM_SECONDS=60     WiFi/Ethernet sleep and auto-shutdown time
+#   SMS_TO=+1...       phone number for alerts (otherwise asked for once,
+#                      then kept in /etc/mudi-sms.conf, never in this repo)
 #
 # Safe to run more than once.
 
 BATT_LIMIT="${BATT_LIMIT:-80}"
 LPM_SECONDS="${LPM_SECONDS:-60}"
+SMS_TO="${SMS_TO:-}"
 FAILED=""
 
 step() { echo; echo "==> $*"; }
@@ -36,7 +41,7 @@ echo "Mudi 7 setup starting: $(date)"
 # ---------------------------------------------------------------------------
 # 1. Battery charge limit
 # ---------------------------------------------------------------------------
-step "1/4 Installing glbattlimit (charge limit ${BATT_LIMIT}%)"
+step "1/5 Installing glbattlimit (charge limit ${BATT_LIMIT}%)"
 if wget -O /usr/bin/glbattlimit \
      https://raw.githubusercontent.com/ChiliApple/mudi7-battery-limit/main/glbattlimit \
    && chmod +x /usr/bin/glbattlimit; then
@@ -68,7 +73,7 @@ fi
 # ---------------------------------------------------------------------------
 # 2. Low-power-mode timers
 # ---------------------------------------------------------------------------
-step "2/4 Setting WiFi/Ethernet sleep and auto-shutdown to ${LPM_SECONDS}s"
+step "2/5 Setting WiFi/Ethernet sleep and auto-shutdown to ${LPM_SECONDS}s"
 if uci set lpm.global.wifi_sleep_time="$LPM_SECONDS" \
    && uci set lpm.global.phy_sleep_time="$LPM_SECONDS" \
    && uci set lpm.global.auto_shutdown_time="$LPM_SECONDS" \
@@ -82,9 +87,90 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Repeater watchdog (runs every minute from cron)
+# 3. mudi-sms (SMS straight through the modem AT port)
 # ---------------------------------------------------------------------------
-step "3/4 Installing repeater watchdog"
+step "3/5 Installing mudi-sms"
+cat > /usr/bin/mudi-sms << 'EOF'
+#!/bin/sh
+# mudi-sms: send an SMS straight through the Mudi 7 modem AT port,
+# bypassing the GL web UI outbox.
+#
+# Usage:  mudi-sms "message text"            (number from /etc/mudi-sms.conf)
+#         mudi-sms "+17035551234" "message"  (explicit number)
+#
+# Exit code 0 = modem confirmed send (+CMGS), 1 = failed. Result goes to logread.
+
+PORT=/dev/at_mdm0
+CONF=/etc/mudi-sms.conf
+OUT=/tmp/mudi-sms.$$
+
+if [ $# -ge 2 ]; then
+  NUM="$1"; MSG="$2"
+else
+  [ -f "$CONF" ] && . "$CONF"
+  NUM="$SMS_TO"; MSG="$1"
+fi
+
+if [ -z "$NUM" ] || [ -z "$MSG" ]; then
+  echo "usage: $0 [number] \"message\"" >&2
+  exit 1
+fi
+
+if [ ! -c "$PORT" ]; then
+  logger -t mudi-sms "AT port $PORT not found"
+  exit 1
+fi
+
+cat "$PORT" > "$OUT" &
+CATPID=$!
+sleep 1
+
+printf 'AT+CMGF=1\r' > "$PORT"; sleep 1
+printf 'AT+CMGS="%s"\r' "$NUM" > "$PORT"; sleep 2
+printf '%s\032' "$MSG" > "$PORT"     # \032 = Ctrl-Z, ends the message
+
+i=0
+while [ $i -lt 30 ]; do
+  grep -qE '\+CMGS:|ERROR' "$OUT" && break
+  sleep 1
+  i=$((i + 1))
+done
+kill $CATPID 2>/dev/null
+
+if grep -q '+CMGS:' "$OUT"; then
+  logger -t mudi-sms "sent to $NUM: $MSG"
+  rm -f "$OUT"
+  exit 0
+else
+  logger -t mudi-sms "send to $NUM failed: $(tr '\r\n' '  ' < "$OUT")"
+  rm -f "$OUT"
+  exit 1
+fi
+EOF
+chmod +x /usr/bin/mudi-sms
+
+# Phone number lives only on the device, never in the public repo.
+if [ -n "$SMS_TO" ]; then
+  echo "SMS_TO=\"$SMS_TO\"" > /etc/mudi-sms.conf
+elif [ ! -f /etc/mudi-sms.conf ]; then
+  printf "    Phone number for SMS alerts (e.g. +17035551234), blank to skip: "
+  read -r SMS_NUM < /dev/tty
+  [ -n "$SMS_NUM" ] && echo "SMS_TO=\"$SMS_NUM\"" > /etc/mudi-sms.conf
+fi
+# Keep the number across firmware updates that preserve settings
+grep -qx '/etc/mudi-sms.conf' /etc/sysupgrade.conf 2>/dev/null \
+  || echo '/etc/mudi-sms.conf' >> /etc/sysupgrade.conf
+
+if [ -f /etc/mudi-sms.conf ]; then
+  ok "mudi-sms installed, alerts go to $(. /etc/mudi-sms.conf; echo "$SMS_TO")"
+else
+  ok "mudi-sms installed (no number set, alerts disabled)"
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Repeater watchdog (runs every minute from cron)
+# ---------------------------------------------------------------------------
+step "4/5 Installing repeater watchdog"
 cat > /root/repeater-watchdog.sh << 'EOF'
 #!/bin/sh
 STA=wlan4
@@ -101,6 +187,11 @@ echo "$N" > "$CNT"
 
 if [ "$N" -ge "$LIMIT" ]; then
   logger "repeater: disconnected ${N} min, stopping"
+  # Text a warning before stopping (skipped if no number is configured)
+  if [ -x /usr/bin/mudi-sms ] && [ -f /etc/mudi-sms.conf ]; then
+    SECS=$(uci -q get lpm.global.auto_shutdown_time)
+    /usr/bin/mudi-sms "Mudi: repeater offline ${N} min. Shutting down due to inactivity in about ${SECS:-60}s."
+  fi
   /etc/init.d/repeater stop
   rm -f "$CNT"
 fi
@@ -136,12 +227,12 @@ if [ -n "$FAILED" ]; then
   exit 1
 fi
 echo
-echo "Steps 1-3 completed successfully."
+echo "Steps 1-4 completed successfully."
 
 # ---------------------------------------------------------------------------
-# 4. Speedify (last - its installer reboots the router)
+# 5. Speedify (last - its installer reboots the router)
 # ---------------------------------------------------------------------------
-step "4/4 Installing Speedify (the router will reboot when it finishes)"
+step "5/5 Installing Speedify (the router will reboot when it finishes)"
 # Download first rather than piping, so a failed download is caught and the
 # installer doesn't compete with this script for stdin.
 if wget -q https://get.speedify.com -O /tmp/speedify-install.sh \
