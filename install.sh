@@ -10,7 +10,7 @@
 #   5. Reboot
 #
 # Usage on the Mudi 7 (as root, via SSH):
-#   wget -O /tmp/install.sh https://raw.githubusercontent.com/YOUR_GITHUB_USER/mudi7-setup/main/install.sh && sh /tmp/install.sh
+#   wget -O /tmp/install.sh https://raw.githubusercontent.com/cdhutzler/mudi7-setup/main/install.sh && sh /tmp/install.sh
 #
 # Options (environment variables):
 #   NO_REBOOT=1        skip the reboot at the end
