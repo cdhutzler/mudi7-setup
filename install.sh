@@ -104,7 +104,7 @@ step "4/5 Installing repeater watchdog"
 cat > /root/repeater-watchdog.sh << 'EOF'
 #!/bin/sh
 STA=wlan4
-LIMIT=2                        # minutes disconnected before stopping
+LIMIT=60                        # minutes disconnected before stopping
 CNT=/tmp/repeater-miss         # RAM file, resets on reboot
 
 if iw dev "$STA" link 2>/dev/null | grep -q "Connected to"; then
