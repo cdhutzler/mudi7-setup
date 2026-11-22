@@ -3,17 +3,15 @@
 #
 # Restores:
 #   1. glbattlimit  - battery charge limit at 80% (with GUI toggle)
-#   2. Speedify
-#   3. LPM timers   - WiFi sleep, Ethernet sleep and auto-shutdown all 60 s
-#   4. Repeater watchdog - stop repeater after 60 min disconnected
+#   2. LPM timers   - WiFi sleep, Ethernet sleep and auto-shutdown all 60 s
+#   3. Repeater watchdog - stop repeater after 60 min disconnected
 #                          (so auto-shutdown can happen)
-#   5. Reboot
+#   4. Speedify     - last, because its installer reboots the router
 #
 # Usage on the Mudi 7 (as root, via SSH):
 #   wget -O /tmp/install.sh https://raw.githubusercontent.com/cdhutzler/mudi7-setup/main/install.sh && sh /tmp/install.sh
 #
 # Options (environment variables):
-#   NO_REBOOT=1        skip the reboot at the end
 #   BATT_LIMIT=80      charge limit percentage
 #   LPM_SECONDS=60     WiFi/Ethernet sleep and auto-shutdown time
 #
@@ -38,7 +36,7 @@ echo "Mudi 7 setup starting: $(date)"
 # ---------------------------------------------------------------------------
 # 1. Battery charge limit
 # ---------------------------------------------------------------------------
-step "1/5 Installing glbattlimit (charge limit ${BATT_LIMIT}%)"
+step "1/4 Installing glbattlimit (charge limit ${BATT_LIMIT}%)"
 if wget -O /usr/bin/glbattlimit \
      https://raw.githubusercontent.com/ChiliApple/mudi7-battery-limit/main/glbattlimit \
    && chmod +x /usr/bin/glbattlimit; then
@@ -68,23 +66,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Speedify
+# 2. Low-power-mode timers
 # ---------------------------------------------------------------------------
-step "2/5 Installing Speedify"
-# Download first rather than piping, so the installer's exit code is checked
-# and it doesn't compete with this script for stdin.
-if wget -q https://get.speedify.com -O /tmp/speedify-install.sh \
-   && sh /tmp/speedify-install.sh; then
-  ok "Speedify installed"
-else
-  fail "Speedify install"
-fi
-rm -f /tmp/speedify-install.sh
-
-# ---------------------------------------------------------------------------
-# 3. Low-power-mode timers
-# ---------------------------------------------------------------------------
-step "3/5 Setting WiFi/Ethernet sleep and auto-shutdown to ${LPM_SECONDS}s"
+step "2/4 Setting WiFi/Ethernet sleep and auto-shutdown to ${LPM_SECONDS}s"
 if uci set lpm.global.wifi_sleep_time="$LPM_SECONDS" \
    && uci set lpm.global.phy_sleep_time="$LPM_SECONDS" \
    && uci set lpm.global.auto_shutdown_time="$LPM_SECONDS" \
@@ -98,9 +82,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Repeater watchdog (runs every minute from cron)
+# 3. Repeater watchdog (runs every minute from cron)
 # ---------------------------------------------------------------------------
-step "4/5 Installing repeater watchdog"
+step "3/4 Installing repeater watchdog"
 cat > /root/repeater-watchdog.sh << 'EOF'
 #!/bin/sh
 STA=wlan4
@@ -140,25 +124,30 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Reboot
+# Report results before Speedify, since its installer reboots the router
+# and this output would be lost.
 # ---------------------------------------------------------------------------
-step "5/5 Finishing"
 if [ -n "$FAILED" ]; then
   echo
   echo "Some steps failed:"
   printf '%s' "$FAILED"
   echo
-  echo "Not rebooting. Fix the issue and re-run this script (it is safe to repeat)."
+  echo "Stopping before Speedify. Fix the issue and re-run this script (it is safe to repeat)."
   exit 1
 fi
+echo
+echo "Steps 1-3 completed successfully."
 
-echo "All steps completed."
-if [ "${NO_REBOOT:-0}" = "1" ]; then
-  echo "NO_REBOOT=1 set - skipping reboot. Run 'reboot' when ready."
-  exit 0
+# ---------------------------------------------------------------------------
+# 4. Speedify (last - its installer reboots the router)
+# ---------------------------------------------------------------------------
+step "4/4 Installing Speedify (the router will reboot when it finishes)"
+# Download first rather than piping, so a failed download is caught and the
+# installer doesn't compete with this script for stdin.
+if wget -q https://get.speedify.com -O /tmp/speedify-install.sh \
+   && sh /tmp/speedify-install.sh; then
+  echo "    OK: Speedify installed"
+else
+  echo "    FAILED: Speedify install. Re-run this script to try again."
+  exit 1
 fi
-
-echo "Rebooting in 10 seconds (Ctrl+C to cancel)..."
-sleep 10
-sync
-reboot
