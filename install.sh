@@ -173,6 +173,7 @@ fi
 step "4/5 Installing repeater watchdog"
 cat > /root/repeater-watchdog.sh << 'EOF'
 #!/bin/sh
+batt_pct() { cat /sys/class/power_supply/*/capacity 2>/dev/null | head -n1 || echo "?"; }
 STA=wlan4
 LIMIT=60                        # minutes disconnected before stopping
 CNT=/tmp/repeater-miss         # RAM file, resets on reboot
@@ -190,7 +191,8 @@ if [ "$N" -ge "$LIMIT" ]; then
   # Text a warning before stopping (skipped if no number is configured)
   if [ -x /usr/bin/mudi-sms ] && [ -f /etc/mudi-sms.conf ]; then
     SECS=$(uci -q get lpm.global.auto_shutdown_time)
-    /usr/bin/mudi-sms "Mudi: repeater offline ${N} min. Shutting down due to inactivity in about ${SECS:-60}s."
+    BATT=$(batt_pct)
+    /usr/bin/mudi-sms "Mudi 7: shutting down due to inactivity in 3 minutes. Battery ${BATT}%"    
   fi
   /etc/init.d/repeater stop
   rm -f "$CNT"
